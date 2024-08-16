@@ -1,9 +1,12 @@
+
+
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.24; 
 
 import {IAccount} from "lib/account-abstraction/contracts/interfaces/IAccount.sol";
 import {PackedUserOperation} from "lib/account-abstraction/contracts/interfaces/PackedUserOperation.sol";  
 import {IEntryPoint} from "lib/account-abstraction/contracts/interfaces/IEntryPoint.sol"; 
+import {INonceManager} from "lib/account-abstraction/contracts/interfaces/INonceManager.sol"; 
 import {SIG_VALIDATION_SUCCESS, SIG_VALIDATION_FAILED} from "lib/account-abstraction/contracts/core/Helpers.sol";
 
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol"; 
@@ -14,9 +17,9 @@ import {MessageHashUtils} from "@openzeppelin/contracts/utils/MessagehashUtils.s
 /// @title BasicAA 
 /// @notice A basic account abstraction contract compliant with ERC-4337 standard
 /// @dev This contract is meant to be used as a base contract for more complex account abstraction contracts - it implements the IAccount interface and inherits from Ownable for access control . 
+/// @dev we enhance this smart account by including 'getnonce' method to get the nonce of the account and 'getEntryPoint' method to get the address of the entryPoint contract.
 
-
-contract BasicAA  is IAccount,Ownable {
+contract BasicAA  is IAccount,Ownable, INonceManager {
 
     /*//////////////////////////////////////////////////////////////
                                  ERRORS
@@ -28,7 +31,8 @@ contract BasicAA  is IAccount,Ownable {
     error BasicAA__NotFromEntryPointOrOwner();
     /// @notice Custom error thrown whhen an external call fails during execution
     error BasicAA__ExternalCallFailed(bytes result);
-
+    
+    
 
     /*//////////////////////////////////////////////////////////////
                              STATE VARIABLES
@@ -36,6 +40,8 @@ contract BasicAA  is IAccount,Ownable {
 
     /// @notice Address of the EntryPoints contract
     IEntryPoint private immutable i_entryPoint; 
+    /// @notice Mapping of nonces for each account
+    mapping(address => mapping(uint192 => uint256)) private nonces;
 
     /// @notice Ensures the function is only callable by the EntryPoints contract
     modifier onlyEntryPoint() {
@@ -95,15 +101,25 @@ contract BasicAA  is IAccount,Ownable {
 
 
     /// @notice Validates the user operation and pays the fees to the EntryPoint contract 
-    /// @dev Can only be called by the EntryPoint contract 
+    /// @dev This function is designed to be callable from outside the contract (by the entryPoint contract
+    /// @dev and only by it (thus the 'require' statement in the modifier) . 
+    /// @dev **override** : This function is meant to implemetn the interface method.
     /// @param userOp The user operation to validate 
     /// @param userOpHash The hash of the user operation 
     /// @param missingAccountFunds The missing funds to be paid by the account to execute the transaction 
     /// 
     function validateUserOp(PackedUserOperation calldata userOp), bytes32 userOpHash, uint256 missingAccountFunds) 
-    external require FromEntryPoint returns (uint256 validationData) {
-        validationData = _validatesignature(userOp, userOpHash);
+    external override require FromEntryPoint returns (uint256 validationData) {
+        uint192 nonceKey = uint192(bytes20(address.this)); 
+        uint256 nonce = getNonce(msg.sender, nonceKey); 
+        if(userOpNonce != nonce) {
+            return SIG_VALIDATION_FAILED;
+        } 
+               validationData = _validatesignature(userOp, userOpHash);
+               if (validationData == SIG_VALIDATION_SUCCESS) {
                   _payPrefund(missingAccountFunds);
+                  ///@dev Incrementing the nonce of the account after succesful validation of the userOperation
+                    nonces[msg.sender][nonceKey] = nonce + 1; 
         }
     }
 
@@ -155,5 +171,13 @@ contract BasicAA  is IAccount,Ownable {
 
     function getEntryPoint() external view returns (address) {
         return address(i_entryPoint);
+    }
+
+    /// @notice Returns the nonce of the account
+    /// @param sender The address of the account
+    /// @param key The key of the account 
+    
+    function getNonce(address sender, uint192 key) external view returns (uint256 nonce) {
+        return nonces[sender][key];  
     }
 }
